@@ -160,6 +160,135 @@ else:
     with col_p2:
         atm_pressure = st.number_input("직접 입력", min_value=0.0, max_value=1000.0, value=atm_slider, step=0.5)
 
-    gas_composition = st.sidebar.selectbox(
-        "주요 대기 성분",
-        ["질소-산소계 (N2/O2)", "이산화탄소 온실계 (CO2)", "메탄
+    gas_composition = st.sidebar.selectbox("주요 대기 성분", ["질소-산소계 (N2/O2)", "이산화탄소 온실계 (CO2)", "메탄-수소계 (CH4/H2)", "수소-헬륨 가스계 (H2/He)", "대기 희박/없음 (Vacuum)"])
+
+    r_min = a * (1 - eccentricity)
+    r_max = a * (1 + eccentricity)
+
+    if d_inner <= r_min and r_max <= d_outer:
+        orbit_status = "안정적 거주 가능 (연중 골디락스 존 유지)"
+        is_habitable = True
+    elif r_min <= d_outer and r_max >= d_inner:
+        orbit_status = "극심한 계절 변화 (타원 궤도로 인해 일부 기간만 골디락스 존 통과)"
+        is_habitable = False
+    elif r_max < d_inner:
+        orbit_status = "극도로 뜨거움 (항성과 너무 가까움)"
+        is_habitable = False
+    else:
+        orbit_status = "극도로 차가움 (항성과 너무 묾)"
+        is_habitable = False
+
+    gravity_ok = (0.3 <= gravity <= 3.0)
+    pressure_ok = (0.2 <= atm_pressure <= 5.0)
+
+    st.subheader("📌 종합 분석 결과")
+    if is_habitable and gravity_ok and pressure_ok and gas_composition != "대기 희박/없음 (Vacuum)":
+        st.success(f"🎉 **최상급 거주 가능 행성!**\n- 궤도 특성: {orbit_status}\n- 표면 중력: {gravity:.2f} G | 대기압: {atm_pressure} atm")
+    else:
+        st.warning(f"⚠️ **특수/극한 환경 행성**\n- 궤도 특성: {orbit_status}\n- 표면 중력: {gravity:.2f} G | 대기압: {atm_pressure} atm")
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("근일점 (가장 가까운 거리)", f"{r_min:.3f} AU")
+    col2.metric("원일점 (가장 먼 거리)", f"{r_max:.3f} AU")
+    col3.metric("표면 중력", f"{gravity:.2f} G")
+    col4.metric("궤도 이심률 (e)", f"{eccentricity:.2f}")
+
+    st.markdown("---")
+    st.subheader("🌌 3D 타원 궤도 파노라마 시각화")
+
+    theta = np.linspace(0, 2 * np.pi, 200)
+    r_orbit = a * (1 - eccentricity**2) / (1 + eccentricity * np.cos(theta))
+    x_orbit = r_orbit * np.cos(theta)
+    y_orbit = r_orbit * np.sin(theta)
+    z_orbit = np.zeros_like(theta)
+
+    x_in = d_inner * np.cos(theta)
+    y_in = d_inner * np.sin(theta)
+    x_out = d_outer * np.cos(theta)
+    y_out = d_outer * np.sin(theta)
+
+    p_x = x_orbit[0]
+    p_y = y_orbit[0]
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter3d(
+        x=[0], y=[0], z=[0],
+        mode='markers+text',
+        marker=dict(size=22, color='gold', symbol='circle'),
+        name=f"항성: {selected_star}",
+        text=[selected_star], textposition="top center"
+    ))
+
+    fig.add_trace(go.Scatter3d(
+        x=x_in, y=y_in, z=z_orbit, mode='lines',
+        line=dict(color='lightgreen', width=2, dash='dot'), name='Goldilocks 안쪽'
+    ))
+    fig.add_trace(go.Scatter3d(
+        x=x_out, y=y_out, z=z_orbit, mode='lines',
+        line=dict(color='darkgreen', width=2, dash='dot'), name='Goldilocks 바깥쪽'
+    ))
+
+    fig.add_trace(go.Scatter3d(
+        x=x_orbit, y=y_orbit, z=z_orbit, mode='lines',
+        line=dict(color='cyan', width=3), name=f'타원 궤도 (e={eccentricity})'
+    ))
+
+    marker_size = float(np.clip(8 * (planet_radius ** 0.5), 6, 25))
+    fig.add_trace(go.Scatter3d(
+        x=[p_x], y=[p_y], z=[0], mode='markers+text',
+        marker=dict(size=marker_size, color='deepskyblue', symbol='circle'),
+        name='행성 위치', text=["내 행성"], textposition="top center"
+    ))
+
+    fig.update_layout(
+        scene=dict(xaxis_title='X (AU)', yaxis_title='Y (AU)', zaxis_title='Z (AU)', aspectmode='data'),
+        margin=dict(l=0, r=0, b=0, t=30), height=550
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.markdown("---")
+    st.subheader("🧬 물리·화학적 환경 연동 외계 생명체 생물학 예측")
+    
+    if st.button("외계 생명체 정밀 프로필 분석하기!"):
+        if "이산화탄소" in gas_composition:
+            blood_color = "보라색/구리 기반 (헤모시아닌 변형 - 구리 성분 결합)"
+            blood_desc = "고농도 CO2 환경에서 산소 및 에너지를 운반하기에 효율적인 구리 중심 수송 단백질"
+        elif "메탄" in gas_composition or "수소-헬륨" in gas_composition:
+            blood_color = "투명한 탄화수소/암모니아 체액"
+            blood_desc = "극저온 또는 고압 가스 환경에서 얼거나 기화하지 않는 지질/탄화수소 기반 순환액"
+        elif "대기 희박" in gas_composition:
+            blood_color = "결정화된 젤리형 뉴클레오산 체액"
+            blood_desc = "진공 및 강한 우주 방사선에 세포가 파괴되지 않도록 보호하는 특수 체액"
+        else:
+            blood_color = "붉은색 (철 기반 헤모글로빈)"
+            blood_desc = "풍부한 산소를 신속하게 사지로 전달하는 철분 결합 순환계"
+
+        if gravity > 2.0 or atm_pressure > 10.0:
+            neuron_type = "초고속 초전도성 실리콘 뉴런망"
+            neuron_desc = "높은 압력과 중력으로 인한 신체 지연을 극복하기 위해 신호 전달 속도가 전선 수준으로 빠름"
+        elif eccentricity > 0.4:
+            neuron_type = "휴면기(동면) 제어 이중 신경계"
+            neuron_desc = "타원 궤도로 인해 행성이 원일점으로 멀어지는 혹한기 동안 대사를 멈추고 휴면하는 감각 스위치 보유"
+        else:
+            neuron_type = "시냅스 광화학 신경망"
+            neuron_desc = "지구 생물과 유사한 화학 물질 기반 전도 신경망"
+
+        if gravity > 2.5:
+            skeleton = "외골격 중장갑 구조 (낮고 넓은 체형, 다리 6~8개)"
+        elif gravity < 0.5:
+            skeleton = "공기주머니 기반의 극도로 가벼운 유기골격 (부유형 또는 길쭉한 체형)"
+        else:
+            skeleton = "내부 척추 골격 구조 (균형 잡힌 다족 또는 직립 체형)"
+
+        if is_habitable:
+            st.balloons()
+        
+        st.markdown(f"""
+        * **🩸 체액/혈액 특성:** `{blood_color}`
+          * *생리학적 원리:* {blood_desc}
+        * **🧠 신경계/뉴런 구조:** `{neuron_type}`
+          * *생리학적 원리:* {neuron_desc}
+        * **🦴 골격 및 외형:** `{skeleton}`
+        * **🔄 계절 적응력:** `e={eccentricity}`로 인해 **{'연중 일정한 기후 적응' if eccentricity < 0.2 else '극심한 주기의 동면/기상 반복 생체 리듬'}**을 가짐
+        """)
