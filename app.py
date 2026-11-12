@@ -1,36 +1,93 @@
+
+
+
+PY 아이콘
+app
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import numpy as np
-import random
+import glob
+import os
 
 # 페이지 레이아웃 설정
 st.set_page_config(page_title="우리은하 외계행성계 시뮬레이터", layout="wide")
 
-# 1. 데이터 로드
+# 1. NASA 데이터 로드 (다운받은 NASA CSV 파일 자동 인식 및 표준 컬럼 매핑)
 @st.cache_data
-def load_data():
-    try:
-        df = pd.read_csv("stars.csv")
-    except:
-        data = {
-            "Star_Name": ["Sun (태양계)", "TRAPPIST-1", "Proxima Centauri"],
-            "Luminosity": [1.0, 0.00052, 0.0017],
-            "Mass": [1.0, 0.09, 0.12],
-            "Spectral_Type": ["G2V", "M8V", "M5.5V"],
-            "Description": ["태양계", "트라피스트-1", "프록시마"]
-        }
-        df = pd.DataFrame(data)
-    return df
+def load_nasa_data():
+    # 현재 폴더 내 NASA에서 다운로드한 CSV 파일(또는 Star.csv.txt 등) 탐색
+    csv_files = [f for f in glob.glob("*.csv*") if "requirements" not in f.lower()]
+    
+    # 우선순위: PS_로 시작하는 NASA 원본 파일 -> 일반 .csv -> Star.csv.txt
+    target_file = None
+    for f in csv_files:
+        if f.startswith("PS_") or "exoplanet" in f.lower():
+            target_file = f
+            break
+    if not target_file and csv_files:
+        target_file = csv_files[0]
 
-df = load_data()
+    if target_file and os.path.exists(target_file):
+        try:
+            # NASA Exoplanet Archive 파일의 '#' 주석 줄 자동 무시
+            raw_df = pd.read_csv(target_file, comment='#', low_memory=False)
+            
+            # NASA 표준 컬럼 확인 ('hostname'이 있으면 NASA 원본 데이터)
+            if 'hostname' in raw_df.columns:
+                # 같은 별에 행성이 여러 개 있거나 중복 행이 있으므로 항성(hostname) 기준으로 대표값 추출
+                # 광도(st_lum)는 태양 대비 로그값(log10(L/L_sun))이므로 10**st_lum 으로 실제 광도 변환
+                stars_df = raw_df.groupby('hostname', as_index=False).first()
+                
+                df = pd.DataFrame()
+                df["Star_Name"] = stars_df["hostname"]
+                
+                # 광도 계산 (st_lum이 로그 스케일인 경우 변환, 없으면 기본값 1.0)
+                if "st_lum" in stars_df.columns:
+                    df["Luminosity"] = stars_df["st_lum"].apply(
+                        lambda x: round(10 ** float(x), 6) if pd.notnull(x) else 1.0
+                    )
+                else:
+                    df["Luminosity"] = 1.0
+                
+                # 항성 질량 (st_mass)
+                df["Mass"] = stars_df["st_mass"].fillna(1.0) if "st_mass" in stars_df.columns else 1.0
+                
+                # 분광형 (st_spectype)
+                df["Spectral_Type"] = stars_df["st_spectype"].fillna("Unknown") if "st_spectype" in stars_df.columns else "Unknown"
+                
+                # 행성 수 및 발견 방법 등을 설명으로 자동 생성
+                disc_method = stars_df["discoverymethod"].fillna("Unknown") if "discoverymethod" in stars_df.columns else "Unknown"
+                sy_pnum = stars_df["sy_pnum"].fillna(1).astype(int) if "sy_pnum" in stars_df.columns else 1
+                df["Description"] = "확인된 행성 수: " + sy_pnum.astype(str) + "개 | 주요 관측법: " + disc_method.astype(str)
+                
+                # 원본 행성 전체 데이터도 함께 반환 (2단계에서 실제 행성 파라미터 자동 불러오기용)
+                return df, raw_df, target_file
+            else:
+                # 기존 커스텀 CSV 포맷인 경우
+                return raw_df, None, target_file
+        except Exception as e:
+            st.error(f"데이터 파일({target_file}) 로드 중 오류 발생: {e}")
+
+    # 파일이 없을 경우 기본 샘플 데이터
+    data = {
+        "Star_Name": ["Sun (태양계)", "TRAPPIST-1", "Proxima Centauri"],
+        "Luminosity": [1.0, 0.00052, 0.0017],
+        "Mass": [1.0, 0.09, 0.12],
+        "Spectral_Type": ["G2V", "M8V", "M5.5V"],
+        "Description": ["태양계", "트라피스트-1", "프록시마"]
+    }
+    return pd.DataFrame(data), None, "내장 기본 데이터"
+
+df, raw_planets_df, loaded_filename = load_nasa_data()
 
 # 2. 왼쪽 상단 메인 네비게이션 (페이지 분리)
 st.sidebar.title("🌌 우주 탐사 메뉴")
+st.sidebar.caption(f"📂 로드된 데이터: `{loaded_filename}`")
 page = st.sidebar.radio("이동할 페이지 선택", ["1. 별 선택 & 우리은하 별 도감", "2. 타원궤도 시뮬레이터 & 생물학 분석"])
 
 # 세션 상태에 선택한 별 저장 (페이지 이동 간 공유)
-if "selected_star_name" not in st.session_state:
+if "selected_star_name" not in st.session_state or st.session_state["selected_star_name"] not in df["Star_Name"].values:
     st.session_state["selected_star_name"] = df["Star_Name"].iloc[0]
 
 # ==========================================
@@ -38,13 +95,13 @@ if "selected_star_name" not in st.session_state:
 # ==========================================
 if page == "1. 별 선택 & 우리은하 별 도감":
     st.title("⭐ 1단계: 탐사할 항성(별) 선택")
-    st.write("우리은하 내 분석 가능한 항성 목록입니다. 원하는 별을 먼저 선택한 후 2단계 시뮬레이터 페이지로 이동하세요.")
+    st.write(f"NASA 실제 데이터(`{loaded_filename}`) 기반 총 **{len(df):,}개**의 항성이 로드되었습니다. 원하는 별을 선택한 후 2단계 시뮬레이터로 이동하세요.")
 
     col1, col2 = st.columns([1, 2])
 
     with col1:
         selected_star = st.selectbox(
-            "탐사할 항성을 선택하세요",
+            "탐사할 항성을 선택하세요 (검색 가능)",
             df["Star_Name"],
             index=int(df[df["Star_Name"] == st.session_state["selected_star_name"]].index[0])
         )
@@ -60,8 +117,16 @@ if page == "1. 별 선택 & 우리은하 별 도감":
         st.write(f"- **질량 (태양=1.0):** {star_info['Mass']}")
         st.write(f"- **특징:** {star_info['Description']}")
 
+        # 해당 항성에 소속된 실제 NASA 외계행성 목록 표시
+        if raw_planets_df is not None and 'hostname' in raw_planets_df.columns:
+            star_planets = raw_planets_df[raw_planets_df['hostname'] == selected_star].drop_duplicates(subset=['pl_name'])
+            if not star_planets.empty:
+                st.markdown("**🪐 이 항성을 공전하는 실제 발견된 외계행성:**")
+                cols_to_show = [c for c in ['pl_name', 'pl_orbsmax', 'pl_orbeccen', 'pl_rade', 'pl_bmasse', 'pl_eqt'] if c in star_planets.columns]
+                st.dataframe(star_planets[cols_to_show], use_container_width=True)
+
     st.markdown("---")
-    st.subheader("📋 전체 등록된 우리은하 항성 데이터베이스")
+    st.subheader("📋 전체 등록된 NASA 항성 데이터베이스")
     st.dataframe(df, use_container_width=True)
 
 # ==========================================
@@ -70,7 +135,7 @@ if page == "1. 별 선택 & 우리은하 별 도감":
 else:
     selected_star = st.session_state["selected_star_name"]
     star_row = df[df["Star_Name"] == selected_star].iloc[0]
-    L = float(star_row["Luminosity"])
+    L = max(float(star_row["Luminosity"]), 1e-6)  # 0으로 나누기 및 음수 방지
 
     st.title(f"🔭 {selected_star} 시스템 - 타원궤도 & 생물학 정밀 시뮬레이터")
 
@@ -78,29 +143,65 @@ else:
     d_inner = (L / 1.1) ** 0.5
     d_outer = (L / 0.53) ** 0.5
 
+    # 실제 NASA 행성 데이터가 있을 경우 기본값으로 자동 세팅
+    default_a = float(np.clip((d_inner + d_outer) / 2, 0.001, 10.0))
+    default_e = 0.1
+    default_rad = 1.0
+    default_mass = 1.0
+
+    if raw_planets_df is not None and 'hostname' in raw_planets_df.columns:
+        star_planets = raw_planets_df[raw_planets_df['hostname'] == selected_star].drop_duplicates(subset=['pl_name'])
+        if not star_planets.empty:
+            st.sidebar.markdown("---")
+            st.sidebar.subheader("🪐 NASA 실측 행성 프리셋")
+            planet_options = ["직접 커스텀 설정"] + star_planets['pl_name'].dropna().tolist()
+            selected_preset = st.sidebar.selectbox("실측 행성 데이터 불러오기", planet_options)
+            
+            if selected_preset != "직접 커스텀 설정":
+                p_row = star_planets[star_planets['pl_name'] == selected_preset].iloc[0]
+                if 'pl_orbsmax' in p_row and pd.notnull(p_row['pl_orbsmax']):
+                    default_a = float(p_row['pl_orbsmax'])
+                if 'pl_orbeccen' in p_row and pd.notnull(p_row['pl_orbeccen']):
+                    default_e = float(np.clip(p_row['pl_orbeccen'], 0.0, 0.8))
+                if 'pl_rade' in p_row and pd.notnull(p_row['pl_rade']):
+                    default_rad = float(np.clip(p_row['pl_rade'], 0.5, 15.0))
+                if 'pl_bmasse' in p_row and pd.notnull(p_row['pl_bmasse']):
+                    default_mass = float(np.clip(p_row['pl_bmasse'], 0.1, 300.0))
+
     # 사이드바 변수 설정
     st.sidebar.markdown("---")
     st.sidebar.header("⚙️ 행성 물리 변수")
     
-    # 타원 궤도 핵심 변수: 이심률(Eccentricity) 추가
-    eccentricity = st.sidebar.slider("궤도 이심률 e (0=원, 0.8=매우 납작한 타원)", 0.0, 0.8, 0.1, 0.05)
-    a = st.sidebar.slider("궤도 장반경 a (AU)", 0.001, float(max(d_outer * 1.5, 5.0)), 1.0)
+    # 타원 궤도 핵심 변수: 이심률(Eccentricity) 및 장반경(a) - 드래그(슬라이더) & 직접 입력 지원
+    eccentricity = st.sidebar.slider("궤도 이심률 e (0=원, 0.8=납작한 타원)", 0.0, 0.8, default_e, 0.01)
+    max_a = float(max(d_outer * 1.5, default_a * 1.5, 5.0))
+    a = st.sidebar.slider("궤도 장반경 a (AU)", 0.001, max_a, float(np.clip(default_a, 0.001, max_a)))
     
-    gravity_mode = st.sidebar.radio("중력 설정 방식", ["자동 계산 (질량/반지름)", "직접 입력"])
-    if gravity_mode == "직접 입력":
-        gravity = st.sidebar.slider("표면 중력 (지구=1.0G)", 0.05, 10.0, 1.0)
-        planet_radius = st.sidebar.slider("행성 반지름 (지구=1.0)", 0.5, 3.0, 1.0)
+    gravity_mode = st.sidebar.radio("중력 설정 방식", ["직접 입력 / 슬라이더", "자동 계산 (질량/반지름)"])
+    if gravity_mode == "직접 입력 / 슬라이더":
+        calc_g = float(np.clip(default_mass / (default_rad ** 2), 0.05, 20.0))
+        col_g1, col_g2 = st.sidebar.columns([2, 1])
+        with col_g1:
+            gravity_slider = st.slider("표면 중력 드래그 (G)", 0.05, 20.0, calc_g, 0.05)
+        with col_g2:
+            gravity = st.number_input("직접 입력", min_value=0.05, max_value=50.0, value=gravity_slider, step=0.1)
+        planet_radius = st.sidebar.slider("행성 반지름 (지구=1.0)", 0.5, 15.0, float(np.clip(default_rad, 0.5, 15.0)))
     else:
-        planet_mass = st.sidebar.slider("행성 질량 (지구=1.0)", 0.1, 10.0, 1.0)
-        planet_radius = st.sidebar.slider("행성 반지름 (지구=1.0)", 0.5, 3.0, 1.0)
+        planet_mass = st.sidebar.slider("행성 질량 (지구=1.0)", 0.1, 300.0, float(np.clip(default_mass, 0.1, 300.0)))
+        planet_radius = st.sidebar.slider("행성 반지름 (지구=1.0)", 0.5, 15.0, float(np.clip(default_rad, 0.5, 15.0)))
         gravity = planet_mass / (planet_radius ** 2)
 
     st.sidebar.markdown("---")
     st.sidebar.header("⚙️ 대기 조건")
-    atm_pressure = st.sidebar.slider("대기압 (atm)", 0.0, 100.0, 1.0)
+    col_p1, col_p2 = st.sidebar.columns([2, 1])
+    with col_p1:
+        atm_slider = st.slider("대기압 드래그 (atm)", 0.0, 100.0, 1.0, 0.1)
+    with col_p2:
+        atm_pressure = st.number_input("직접 입력", min_value=0.0, max_value=1000.0, value=atm_slider, step=0.5)
+
     gas_composition = st.sidebar.selectbox(
         "주요 대기 성분",
-        ["질소-산소계 (N2/O2)", "이산화탄소 온실계 (CO2)", "메탄-수소계 (CH4/H2)", "대기 희박/없음 (Vacuum)"]
+        ["질소-산소계 (N2/O2)", "이산화탄소 온실계 (CO2)", "메탄-수소계 (CH4/H2)", "수소-헬륨 가스계 (H2/He)", "대기 희박/없음 (Vacuum)"]
     )
 
     # 타원 궤도 근일점(r_min)과 원일점(r_max) 계산
@@ -132,8 +233,8 @@ else:
         st.warning(f"⚠️ **특수/극한 환경 행성**\n- 궤도 특성: {orbit_status}\n- 표면 중력: {gravity:.2f} G | 대기압: {atm_pressure} atm")
 
     col1, col2, col3, col4 = st.columns(4)
-    col1.metric("근일점 (가장 가까운 거리)", f"{r_min:.2f} AU")
-    col2.metric("원일점 (가장 먼 거리)", f"{r_max:.2f} AU")
+    col1.metric("근일점 (가장 가까운 거리)", f"{r_min:.3f} AU")
+    col2.metric("원일점 (가장 먼 거리)", f"{r_max:.3f} AU")
     col3.metric("표면 중력", f"{gravity:.2f} G")
     col4.metric("궤도 이심률 (e)", f"{eccentricity:.2f}")
 
@@ -142,7 +243,6 @@ else:
     st.subheader("🌌 3D 타원 궤도 파노라마 시각화")
 
     theta = np.linspace(0, 2 * np.pi, 200)
-    # 극좌표 타원 공식: r = a(1 - e^2) / (1 + e * cos(theta))
     r_orbit = a * (1 - eccentricity**2) / (1 + eccentricity * np.cos(theta))
     x_orbit = r_orbit * np.cos(theta)
     y_orbit = r_orbit * np.sin(theta)
@@ -160,7 +260,7 @@ else:
 
     fig = go.Figure()
 
-    # 항성 (타원의 초점에 위치해야 하지만 시각적 편의를 위해 원점에 배치)
+    # 항성
     fig.add_trace(go.Scatter3d(
         x=[0], y=[0], z=[0],
         mode='markers+text',
@@ -182,13 +282,14 @@ else:
     # 타원 궤도 선
     fig.add_trace(go.Scatter3d(
         x=x_orbit, y=y_orbit, z=z_orbit, mode='lines',
-        line=dict(color='cyan', width=2), name=f'타원 궤도 (e={eccentricity})'
+        line=dict(color='cyan', width=3), name=f'타원 궤도 (e={eccentricity})'
     ))
 
     # 내 행성
+    marker_size = float(np.clip(8 * (planet_radius ** 0.5), 6, 25))
     fig.add_trace(go.Scatter3d(
         x=[p_x], y=[p_y], z=[0], mode='markers+text',
-        marker=dict(size=10 * planet_radius, color='deepskyblue', symbol='circle'),
+        marker=dict(size=marker_size, color='deepskyblue', symbol='circle'),
         name='행성 위치', text=["내 행성"], textposition="top center"
     ))
 
@@ -207,9 +308,9 @@ else:
         if "이산화탄소" in gas_composition:
             blood_color = "보라색/구리 기반 (헤모시아닌 변형 - 구리 성분 결합)"
             blood_desc = "고농도 CO2 환경에서 산소 및 에너지를 운반하기에 효율적인 구리 중심 수송 단백질"
-        elif "메탄" in gas_composition:
-            blood_color = "투명한 탄화수소 체액"
-            blood_desc = "극저온 메탄 바다 환경에서 얼지 않는 지질/탄화수소 기반 순환액"
+        elif "메탄" in gas_composition or "수소-헬륨" in gas_composition:
+            blood_color = "투명한 탄화수소/암모니아 체액"
+            blood_desc = "극저온 또는 고압 가스 환경에서 얼거나 기화하지 않는 지질/탄화수소 기반 순환액"
         elif "대기 희박" in gas_composition:
             blood_color = "결정화된 젤리형 뉴클레오산 체액"
             blood_desc = "진공 및 강한 우주 방사선에 세포가 파괴되지 않도록 보호하는 특수 체액"
@@ -230,13 +331,14 @@ else:
 
         # 3. 신체 구조 및 골격
         if gravity > 2.5:
-            skeleton = "외골격 중장갑 구조 (다리 6~8개)"
+            skeleton = "외골격 중장갑 구조 (낮고 넓은 체형, 다리 6~8개)"
         elif gravity < 0.5:
-            skeleton = "공기주머니 기반의 극도로 가벼운 유기골격 (부유형)"
+            skeleton = "공기주머니 기반의 극도로 가벼운 유기골격 (부유형 또는 길쭉한 체형)"
         else:
-            skeleton = "내부 척추 골격 구조"
+            skeleton = "내부 척추 골격 구조 (균형 잡힌 다족 또는 직립 체형)"
 
-        st.balloons() if is_habitable else None
+        if is_habitable:
+            st.balloons()
         
         st.markdown(f"""
         * **🩸 체액/혈액 특성:** `{blood_color}`
@@ -246,3 +348,4 @@ else:
         * **🦴 골격 및 외형:** `{skeleton}`
         * **🔄 계절 적응력:** `이심률 e={eccentricity}`로 인해 **{'연중 일정한 기후 적응' if eccentricity < 0.2 else '극심한 주기의 동면/기상 반복 생체 리듬'}**을 가짐
         """)
+분석 중
